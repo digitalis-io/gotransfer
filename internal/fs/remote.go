@@ -106,10 +106,12 @@ func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string) 
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
 
-	_, err = io.Copy(dst, src)
-	return err
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
 }
 
 // Download copies the remote file at remotePath to localPath on the local filesystem.
@@ -124,8 +126,10 @@ func (r *remoteBrowser) Download(_ context.Context, remotePath, localPath string
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
 
-	_, err = io.Copy(dst, src)
-	return err
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
 }
