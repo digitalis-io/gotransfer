@@ -223,6 +223,18 @@ func (p *PaneModel) Render(active bool) string {
 		}
 		return strings.Join(lines, "\n")
 	}
+	if p.width < 20 {
+		msg := "<too narrow>"
+		if len(msg) > p.width {
+			msg = msg[:p.width]
+		}
+		line := msg + strings.Repeat(" ", p.width-len(msg))
+		lines := make([]string, max(p.height, 0))
+		for i := range lines {
+			lines[i] = line
+		}
+		return strings.Join(lines, "\n")
+	}
 	// border consumes 2 columns and 2 rows
 	innerW := p.width - 2
 	innerH := p.height - 2
@@ -251,6 +263,28 @@ func (p *PaneModel) Render(active bool) string {
 	}
 
 	vis := p.visible()
+
+	if len(vis) == 0 && rowsH > 0 {
+		empty := "(empty)"
+		row := empty + strings.Repeat(" ", innerW-len(empty))
+		row = ansi.Truncate(row, innerW, "")
+		lines = append(lines, lipgloss.NewStyle().Foreground(colMuted).Render(row))
+		for i := 1; i < rowsH; i++ {
+			lines = append(lines, strings.Repeat(" ", innerW))
+		}
+		// footer
+		footer := fmt.Sprintf("%d items", len(p.entries))
+		footer = lipgloss.NewStyle().Foreground(colMuted).Width(innerW).Render(footer)
+		lines = append(lines, footer)
+		content := strings.Join(lines, "\n")
+		var borderStyle lipgloss.Style
+		if active {
+			borderStyle = styleActiveBorder
+		} else {
+			borderStyle = styleInactiveBorder
+		}
+		return borderStyle.Width(innerW).Height(innerH).Render(content)
+	}
 
 	// Scroll window centred on cursor
 	start := 0

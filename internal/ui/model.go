@@ -24,6 +24,7 @@ const (
 	modeRename
 	modeFilter
 	modeMkdir
+	modeHelp
 )
 
 // confirmAction distinguishes which confirm dialog is active.
@@ -231,8 +232,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeHelp {
+		m.mode = modeBrowse
+		return m, nil
+	}
+
 	if m.mode == modeError {
-		if msg.Code == tea.KeyEsc {
+		if msg.Code == tea.KeyEsc || msg.Code == tea.KeyEnter {
 			m.mode = modeBrowse
 			m.lastErr = nil
 		}
@@ -480,6 +486,9 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.inputBuf = ""
 		m.mode = modeMkdir
 
+	case '?':
+		m.mode = modeHelp
+
 	case tea.KeyEsc, 'q':
 		return m, tea.Quit
 	}
@@ -500,7 +509,7 @@ func (m Model) render() string {
 		m.right.Render(m.activePane == 1),
 	)
 	footer := styleStatusBar.Render(
-		"  [Tab] switch pane  [j/k] navigate  [q] quit",
+		"  [Tab] switch pane  [j/k] navigate  [?] help  [q] quit",
 	)
 	var b strings.Builder
 	b.WriteString(panes)
@@ -557,6 +566,10 @@ func (m Model) render() string {
 		row := "│ " + display + strings.Repeat(" ", pad) + " │"
 		popup := "┌─ New Directory ─────────────┐\n" + row + "\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘"
 		content = overlayCenter(content, popup)
+	}
+
+	if m.mode == modeHelp {
+		content = overlayCenter(content, renderHelp(m.width, m.height))
 	}
 
 	if m.mode == modeError && m.lastErr != nil {
