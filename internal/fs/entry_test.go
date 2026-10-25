@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -18,7 +19,10 @@ func TestFormatSize(t *testing.T) {
 		{2254857830, "2.1 GB"},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, FormatSize(c.n))
+		c := c
+		t.Run(fmt.Sprintf("n=%d", c.n), func(t *testing.T) {
+			assert.Equal(t, c.want, FormatSize(c.n))
+		})
 	}
 }
 

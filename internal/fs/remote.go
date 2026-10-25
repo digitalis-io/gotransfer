@@ -72,7 +72,7 @@ func (r *remoteBrowser) Stat(_ context.Context, path string) (FileEntry, error) 
 	}, nil
 }
 
-// Delete removes the file or directory at path. It uses Stat to determine which removal call to use.
+// Delete removes the file or directory at path. Directories must be empty; pkg/sftp RemoveDirectory fails on non-empty directories.
 func (r *remoteBrowser) Delete(ctx context.Context, path string) error {
 	entry, err := r.Stat(ctx, path)
 	if err != nil {

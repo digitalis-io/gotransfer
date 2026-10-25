@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sort"
 )
 
@@ -32,7 +33,7 @@ func (l *localBrowser) List(_ context.Context, path string) ([]FileEntry, error)
 			isLink = true
 		} else if !de.Type().IsRegular() && !de.IsDir() {
 			// double-check via Lstat for unusual types
-			fi, lerr := os.Lstat(path + "/" + de.Name())
+			fi, lerr := os.Lstat(filepath.Join(path, de.Name()))
 			if lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 				isLink = true
 			}
@@ -72,7 +73,7 @@ func (l *localBrowser) Stat(_ context.Context, path string) (FileEntry, error) {
 	}, nil
 }
 
-// Delete removes the file or directory tree at path.
+// Delete removes the file or directory tree at path recursively.
 func (l *localBrowser) Delete(_ context.Context, path string) error {
 	return os.RemoveAll(path)
 }

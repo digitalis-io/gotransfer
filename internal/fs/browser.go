@@ -10,7 +10,7 @@ type Browser interface {
 	// Stat returns metadata for the file or directory at path.
 	Stat(ctx context.Context, path string) (FileEntry, error)
 
-	// Delete removes the file or empty directory at path.
+	// Delete removes the file or directory at path; behaviour for non-empty directories is implementation-defined.
 	Delete(ctx context.Context, path string) error
 
 	// Rename moves or renames src to dst.
