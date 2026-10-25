@@ -573,9 +573,18 @@ func (m Model) render() string {
 	}
 
 	if m.mode == modeError && m.lastErr != nil {
+		const errInnerW = 28
+		hint := "[Enter/Esc] dismiss"
+		hintW := lipgloss.Width(hint)
+		hintPad := errInnerW - hintW
+		if hintPad < 0 {
+			hintPad = 0
+		}
+		hintRow := "│ " + hint + strings.Repeat(" ", hintPad) + " │"
 		popup := fmt.Sprintf(
-			"┌─ Error ────────────────────┐\n│ %-28s │\n└────────────────────────────┘",
+			"┌─ Error ────────────────────┐\n│ %-28s │\n%s\n└────────────────────────────┘",
 			truncateStr(m.lastErr.Error(), 28),
+			hintRow,
 		)
 		content = overlayCenter(content, popup)
 	}

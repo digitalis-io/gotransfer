@@ -225,8 +225,9 @@ func (p *PaneModel) Render(active bool) string {
 	}
 	if p.width < 20 {
 		msg := "<too narrow>"
-		if len(msg) > p.width {
-			msg = msg[:p.width]
+		r := []rune(msg)
+		if p.width < len(r) {
+			msg = string(r[:p.width])
 		}
 		line := msg + strings.Repeat(" ", p.width-len(msg))
 		lines := make([]string, max(p.height, 0))
@@ -273,7 +274,7 @@ func (p *PaneModel) Render(active bool) string {
 			lines = append(lines, strings.Repeat(" ", innerW))
 		}
 		// footer
-		footer := fmt.Sprintf("%d items", len(p.entries))
+		footer := fmt.Sprintf("%d items", len(p.visible()))
 		footer = lipgloss.NewStyle().Foreground(colMuted).Width(innerW).Render(footer)
 		lines = append(lines, footer)
 		content := strings.Join(lines, "\n")
@@ -364,7 +365,7 @@ func (p *PaneModel) Render(active bool) string {
 	if p.filter != "" {
 		footer = fmt.Sprintf("%d/%d items", len(vis), len(p.entries))
 	} else {
-		footer = fmt.Sprintf("%d items", len(p.entries))
+		footer = fmt.Sprintf("%d items", len(vis))
 	}
 	footer = lipgloss.NewStyle().Foreground(colMuted).Width(innerW).Render(footer)
 	lines = append(lines, footer)

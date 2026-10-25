@@ -84,6 +84,31 @@ func TestModelDeleteConfirmExecutes(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr))
 }
 
+func TestModelHelpOverlay(t *testing.T) {
+	lb := fs.NewLocalBrowser()
+	m := NewModel(lb, lb, t.TempDir(), t.TempDir())
+	m.width, m.height = 120, 40
+	m2, _ := m.Update(tea.KeyPressMsg{Code: '?'})
+	assert.Equal(t, modeHelp, m2.(Model).mode)
+	// any key dismisses
+	m3, _ := m2.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	assert.Equal(t, modeBrowse, m3.(Model).mode)
+}
+
+func TestPaneNarrowGuard(t *testing.T) {
+	p := PaneModel{width: 15, height: 10}
+	p.SetEntries([]fs.FileEntry{{Name: "test.txt"}})
+	out := p.Render(false)
+	assert.Contains(t, out, "<too narrow>")
+}
+
+func TestPaneEmptyDirGuard(t *testing.T) {
+	p := PaneModel{width: 40, height: 10}
+	p.SetEntries([]fs.FileEntry{})
+	out := p.Render(false)
+	assert.Contains(t, out, "(empty)")
+}
+
 func TestModelMkdirExecutes(t *testing.T) {
 	lb := fs.NewLocalBrowser()
 	tmp := t.TempDir()
