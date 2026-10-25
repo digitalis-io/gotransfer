@@ -37,6 +37,7 @@ type PaneModel struct {
 	sideIdx  int
 	width    int
 	height   int
+	selected map[string]bool
 }
 
 // SetEntries replaces the current entry list and clamps the cursor into range.
@@ -112,6 +113,55 @@ func (p *PaneModel) SelectedEntry() (fs.FileEntry, bool) {
 		return vis[len(vis)-1], true
 	}
 	return vis[p.cursor], true
+}
+
+// ToggleSelect toggles the selection state of the entry at the cursor, then advances the cursor.
+func (p *PaneModel) ToggleSelect() {
+	vis := p.visible()
+	if len(vis) == 0 {
+		return
+	}
+	e := vis[p.cursor]
+	if p.selected[e.Name] {
+		delete(p.selected, e.Name)
+	} else {
+		if p.selected == nil {
+			p.selected = make(map[string]bool)
+		}
+		p.selected[e.Name] = true
+	}
+	p.MoveCursor(1)
+}
+
+// SelectAll marks every visible entry as selected.
+func (p *PaneModel) SelectAll() {
+	p.selected = make(map[string]bool)
+	for _, e := range p.visible() {
+		p.selected[e.Name] = true
+	}
+}
+
+// DeselectAll clears all selections.
+func (p *PaneModel) DeselectAll() {
+	p.selected = nil
+}
+
+// SelectedEntries returns the selected entries in visible order.
+// When nothing is explicitly selected it falls back to the single entry at the cursor.
+func (p *PaneModel) SelectedEntries() []fs.FileEntry {
+	if len(p.selected) == 0 {
+		if e, ok := p.SelectedEntry(); ok {
+			return []fs.FileEntry{e}
+		}
+		return nil
+	}
+	var out []fs.FileEntry
+	for _, e := range p.visible() {
+		if p.selected[e.Name] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // SetFilter sets the active filter string and clamps the cursor into the new visible range.
@@ -266,7 +316,7 @@ func (p *PaneModel) Render(active bool) string {
 		case e.Mode&0o111 != 0:
 			rowStyle = rowStyle.Foreground(colExec)
 		}
-		if idx == p.cursor {
+		if p.selected[e.Name] || idx == p.cursor {
 			rowStyle = rowStyle.Background(colSel)
 		}
 

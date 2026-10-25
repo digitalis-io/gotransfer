@@ -37,6 +37,13 @@ type entriesLoadedMsg struct {
 // errorMsg carries an error to display in the TUI.
 type errorMsg struct{ err error }
 
+// transferItem holds the parameters for a queued bulk transfer.
+type transferItem struct {
+	src, dst string
+	upload   bool
+	total    int64
+}
+
 // statResultMsg carries the result of an async Stat check before a transfer.
 type statResultMsg struct {
 	src, dst string
@@ -67,11 +74,12 @@ type Model struct {
 	transferCh    <-chan int64
 	transferErrCh <-chan error
 	destPane      int
-	confirmMsg    string
-	pendingSrc    string
-	pendingDst    string
-	pendingUpload bool
-	pendingTotal  int64
+	confirmMsg       string
+	pendingSrc       string
+	pendingDst       string
+	pendingUpload    bool
+	pendingTotal     int64
+	pendingTransfers []transferItem
 }
 
 // NewModel creates a Model wired to the given browsers and starting paths.
@@ -131,14 +139,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.written = msg.written
 		m.progress.total = msg.total
 		if msg.done {
+			m.transferCh = nil
+			m.transferErrCh = nil
 			if msg.err != nil {
 				m.mode = modeError
 				m.lastErr = msg.err
-			} else {
-				m.mode = modeBrowse
+				m.pendingTransfers = nil
+				if m.destPane == 0 {
+					return m, loadEntriesCmd(m.leftBrowser, m.left.cwd, 0)
+				}
+				return m, loadEntriesCmd(m.rightBrowser, m.right.cwd, 1)
 			}
-			m.transferCh = nil
-			m.transferErrCh = nil
+			// Dequeue next bulk transfer if any.
+			if len(m.pendingTransfers) > 0 {
+				next := m.pendingTransfers[0]
+				m.pendingTransfers = m.pendingTransfers[1:]
+				var cmd tea.Cmd
+				m, cmd = startTransferWith(m, next.src, next.dst, next.upload, next.total)
+				return m, cmd
+			}
+			m.mode = modeBrowse
 			// Reload the destination pane captured at transfer start.
 			if m.destPane == 0 {
 				return m, loadEntriesCmd(m.leftBrowser, m.left.cwd, 0)
@@ -209,6 +229,13 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.Code {
+	case tea.KeySpace:
+		if m.activePane == 0 {
+			m.left.ToggleSelect()
+		} else {
+			m.right.ToggleSelect()
+		}
+
 	case tea.KeyTab:
 		if m.activePane == 0 {
 			m.activePane = 1
@@ -245,6 +272,20 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case '/':
 		m.mode = modeFilter
 
+	case 'a':
+		if m.activePane == 0 {
+			m.left.SelectAll()
+		} else {
+			m.right.SelectAll()
+		}
+
+	case 'A':
+		if m.activePane == 0 {
+			m.left.DeselectAll()
+		} else {
+			m.right.DeselectAll()
+		}
+
 	case 's':
 		if m.activePane == 0 {
 			m.left.CycleSort()
@@ -265,29 +306,50 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return errorMsg{err: fmt.Errorf("right browser does not support transfers")}
 			}
 		}
-		var entry fs.FileEntry
-		var found bool
+		upload := m.activePane == 0
+		var allEntries []fs.FileEntry
 		if m.activePane == 0 {
-			entry, found = m.left.SelectedEntry()
+			allEntries = m.left.SelectedEntries()
 		} else {
-			entry, found = m.right.SelectedEntry()
+			allEntries = m.right.SelectedEntries()
 		}
-		if !found || entry.IsDir {
+		// Filter out directories.
+		var entries []fs.FileEntry
+		for _, e := range allEntries {
+			if !e.IsDir {
+				entries = append(entries, e)
+			}
+		}
+		if len(entries) == 0 {
 			return m, nil
 		}
-		upload := m.activePane == 0
-		var src, dst string
-		var dstBrowser fs.Browser
-		if upload {
-			src = filepath.Join(m.left.cwd, entry.Name)
-			dst = m.right.cwd + "/" + entry.Name
-			dstBrowser = m.rightBrowser
-		} else {
-			src = m.right.cwd + "/" + entry.Name
-			dst = filepath.Join(m.left.cwd, entry.Name)
-			dstBrowser = m.leftBrowser
+		buildPaths := func(e fs.FileEntry) (src, dst string, dstBrowser fs.Browser) {
+			if upload {
+				src = filepath.Join(m.left.cwd, e.Name)
+				dst = m.right.cwd + "/" + e.Name
+				dstBrowser = m.rightBrowser
+			} else {
+				src = m.right.cwd + "/" + e.Name
+				dst = filepath.Join(m.left.cwd, e.Name)
+				dstBrowser = m.leftBrowser
+			}
+			return src, dst, dstBrowser
 		}
-		return m, statCmd(dstBrowser, src, dst, upload, entry.Size)
+		if len(entries) == 1 {
+			// Single: use stat check to prompt before overwrite.
+			src, dst, dstBrowser := buildPaths(entries[0])
+			return m, statCmd(dstBrowser, src, dst, upload, entries[0].Size)
+		}
+		// Bulk: skip overwrite check, queue all transfers and start first.
+		items := make([]transferItem, len(entries))
+		for i, e := range entries {
+			src, dst, _ := buildPaths(e)
+			items[i] = transferItem{src: src, dst: dst, upload: upload, total: e.Size}
+		}
+		m.pendingTransfers = items[1:]
+		var cmd tea.Cmd
+		m, cmd = startTransferWith(m, items[0].src, items[0].dst, items[0].upload, items[0].total)
+		return m, cmd
 
 	case tea.KeyEsc, 'q':
 		return m, tea.Quit

@@ -69,3 +69,13 @@ func TestPaneSortBySize(t *testing.T) {
 	p.CycleSort() // SortName(0) → SortSize(1), ascending
 	assert.Equal(t, "small", p.visible()[0].Name)
 }
+
+func TestPaneMultiSelect(t *testing.T) {
+	p := PaneModel{width: 40, height: 10}
+	p.SetEntries([]fs.FileEntry{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	p.ToggleSelect() // select a, cursor→1
+	p.ToggleSelect() // select b, cursor→2
+	assert.Len(t, p.SelectedEntries(), 2)
+	p.DeselectAll()
+	assert.Len(t, p.SelectedEntries(), 1) // fallback to cursor (c at idx 2)
+}
