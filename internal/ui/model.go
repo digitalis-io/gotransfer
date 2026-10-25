@@ -17,21 +17,21 @@ import (
 type appMode int
 
 const (
-	modeBrowse   appMode = iota
-	modeConfirm          //nolint:deadcode,unused
-	modeProgress         //nolint:deadcode,unused
-	modeError            //nolint:deadcode,unused
-	modeRename           //nolint:deadcode,unused
-	modeFilter           //nolint:deadcode,unused
-	modeMkdir            //nolint:deadcode,unused
+	modeBrowse appMode = iota
+	modeConfirm
+	modeProgress
+	modeError
+	modeRename
+	modeFilter
+	modeMkdir
 )
 
 // confirmAction distinguishes which confirm dialog is active.
 type confirmAction int
 
 const (
-	confirmDelete   confirmAction = iota
-	confirmOverwrite              //nolint:deadcode,unused
+	confirmDelete confirmAction = iota
+	confirmOverwrite
 )
 
 // entriesLoadedMsg carries the result of a directory listing.
@@ -277,6 +277,11 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch msg.Code {
 		case tea.KeyEnter:
 			if m.inputBuf != "" {
+				if strings.ContainsAny(m.inputBuf, "/\\") || m.inputBuf == "." || m.inputBuf == ".." {
+					m.mode = modeError
+					m.lastErr = fmt.Errorf("invalid name: %q", m.inputBuf)
+					return m, nil
+				}
 				side := m.activePane
 				cwd := m.activePaneCwd()
 				src := filepath.Join(cwd, m.pendingEntry.Name)
@@ -293,8 +298,8 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.inputBuf = string(runes[:len(runes)-1])
 			}
 		default:
-			if msg.Code >= 32 {
-				m.inputBuf += string(msg.Code)
+			if msg.Text != "" {
+				m.inputBuf += msg.Text
 			}
 		}
 		return m, nil
@@ -304,6 +309,11 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch msg.Code {
 		case tea.KeyEnter:
 			if m.inputBuf != "" {
+				if strings.ContainsAny(m.inputBuf, "/\\") || m.inputBuf == "." || m.inputBuf == ".." {
+					m.mode = modeError
+					m.lastErr = fmt.Errorf("invalid name: %q", m.inputBuf)
+					return m, nil
+				}
 				side := m.activePane
 				cwd := m.activePaneCwd()
 				path := filepath.Join(cwd, m.inputBuf)
@@ -319,8 +329,8 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.inputBuf = string(runes[:len(runes)-1])
 			}
 		default:
-			if msg.Code >= 32 {
-				m.inputBuf += string(msg.Code)
+			if msg.Text != "" {
+				m.inputBuf += msg.Text
 			}
 		}
 		return m, nil
@@ -455,7 +465,7 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if e, ok := m.activeEntry(); ok {
 			m.pendingEntry = e
 			m.pending = confirmDelete
-			m.confirmMsg = fmt.Sprintf("Delete %s?", e.Name)
+			m.confirmMsg = fmt.Sprintf("Delete %s? [y/N]", truncateStr(e.Name, 13))
 			m.mode = modeConfirm
 		}
 
@@ -525,19 +535,27 @@ func (m Model) render() string {
 
 	if m.mode == modeRename {
 		display := truncateStr(m.inputBuf, 24) + "█"
-		popup := fmt.Sprintf(
-			"┌─ Rename ────────────────────┐\n│ %-27s │\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘",
-			truncateStr(display, 27),
-		)
+		innerW := 27
+		w := lipgloss.Width(display)
+		pad := innerW - w
+		if pad < 0 {
+			pad = 0
+		}
+		row := "│ " + display + strings.Repeat(" ", pad) + " │"
+		popup := "┌─ Rename ────────────────────┐\n" + row + "\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘"
 		content = overlayCenter(content, popup)
 	}
 
 	if m.mode == modeMkdir {
 		display := truncateStr(m.inputBuf, 24) + "█"
-		popup := fmt.Sprintf(
-			"┌─ New Directory ─────────────┐\n│ %-27s │\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘",
-			truncateStr(display, 27),
-		)
+		innerW := 27
+		w := lipgloss.Width(display)
+		pad := innerW - w
+		if pad < 0 {
+			pad = 0
+		}
+		row := "│ " + display + strings.Repeat(" ", pad) + " │"
+		popup := "┌─ New Directory ─────────────┐\n" + row + "\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘"
 		content = overlayCenter(content, popup)
 	}
 
@@ -578,7 +596,7 @@ func (m Model) activePaneCwd() string {
 }
 
 // activeEntry returns the cursor entry of the active pane.
-func (m *Model) activeEntry() (fs.FileEntry, bool) {
+func (m Model) activeEntry() (fs.FileEntry, bool) {
 	if m.activePane == 0 {
 		return m.left.SelectedEntry()
 	}

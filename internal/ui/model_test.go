@@ -94,7 +94,7 @@ func TestModelMkdirExecutes(t *testing.T) {
 	m2 := m2raw.(Model)
 	// type name
 	for _, r := range "newdir" {
-		m2raw, _ = m2.Update(tea.KeyPressMsg{Code: r})
+		m2raw, _ = m2.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		m2 = m2raw.(Model)
 	}
 	assert.Equal(t, "newdir", m2.inputBuf)
