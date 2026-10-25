@@ -33,6 +33,28 @@ func TestLocalBrowserListEmpty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestLocalBrowserListDirsFirst(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "z_file.txt"), []byte{}, 0644)
+	os.WriteFile(filepath.Join(tmp, "a_file.txt"), []byte{}, 0644)
+	os.Mkdir(filepath.Join(tmp, "m_dir"), 0755)
+	os.Mkdir(filepath.Join(tmp, "b_dir"), 0755)
+
+	b := NewLocalBrowser()
+	entries, err := b.List(context.Background(), tmp)
+	require.NoError(t, err)
+	require.Len(t, entries, 4)
+	// dirs first, sorted
+	assert.Equal(t, "b_dir", entries[0].Name)
+	assert.True(t, entries[0].IsDir)
+	assert.Equal(t, "m_dir", entries[1].Name)
+	assert.True(t, entries[1].IsDir)
+	// files after, sorted
+	assert.Equal(t, "a_file.txt", entries[2].Name)
+	assert.False(t, entries[2].IsDir)
+	assert.Equal(t, "z_file.txt", entries[3].Name)
+}
+
 func TestLocalBrowserMkdirRenameDelete(t *testing.T) {
 	tmp := t.TempDir()
 	b := NewLocalBrowser()
