@@ -8,11 +8,13 @@ import (
 
 // progressModel holds the state of an in-progress file transfer.
 type progressModel struct {
-	filename string
-	written  int64
-	total    int64
-	done     bool
-	startAt  time.Time
+	filename  string
+	written   int64
+	total     int64
+	fileNum   int // current file index, 1-based
+	fileTotal int // total files in this transfer batch
+	done      bool
+	startAt   time.Time
 }
 
 // Render returns a two-line progress bar string fitting within width columns.
@@ -43,5 +45,9 @@ func (p progressModel) Render(width int) string {
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
 
-	return fmt.Sprintf("%s\n%s %d%%%s", p.filename, bar, pct, speed)
+	countStr := ""
+	if p.fileTotal > 1 {
+		countStr = fmt.Sprintf(" [%d/%d]", p.fileNum, p.fileTotal)
+	}
+	return fmt.Sprintf("%s%s\n%s %d%%%s", p.filename, countStr, bar, pct, speed)
 }

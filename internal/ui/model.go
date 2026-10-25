@@ -63,23 +63,24 @@ type ProgressMsg struct {
 
 // Model is the root bubbletea model for the dual-pane TUI.
 type Model struct {
-	left, right   PaneModel
-	activePane    int
-	mode          appMode
-	lastErr       error
-	width, height int
-	leftBrowser   fs.Browser
-	rightBrowser  fs.Browser
-	progress      progressModel
-	transferCh    <-chan int64
-	transferErrCh <-chan error
-	destPane      int
+	left, right      PaneModel
+	activePane       int
+	mode             appMode
+	lastErr          error
+	width, height    int
+	leftBrowser      fs.Browser
+	rightBrowser     fs.Browser
+	progress         progressModel
+	transferCh       <-chan int64
+	transferErrCh    <-chan error
+	destPane         int
 	confirmMsg       string
 	pendingSrc       string
 	pendingDst       string
 	pendingUpload    bool
 	pendingTotal     int64
 	pendingTransfers []transferItem
+	bulkTotal        int // total files queued for the current bulk transfer
 }
 
 // NewModel creates a Model wired to the given browsers and starting paths.
@@ -159,6 +160,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			m.mode = modeBrowse
+			// Clear selection on the source pane.
+			if m.destPane == 1 {
+				m.left.DeselectAll()
+			} else {
+				m.right.DeselectAll()
+			}
 			// Reload the destination pane captured at transfer start.
 			if m.destPane == 0 {
 				return m, loadEntriesCmd(m.leftBrowser, m.left.cwd, 0)
@@ -338,6 +345,7 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(entries) == 1 {
 			// Single: use stat check to prompt before overwrite.
 			src, dst, dstBrowser := buildPaths(entries[0])
+			m.bulkTotal = 1
 			return m, statCmd(dstBrowser, src, dst, upload, entries[0].Size)
 		}
 		// Bulk: skip overwrite check, queue all transfers and start first.
@@ -347,6 +355,7 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			items[i] = transferItem{src: src, dst: dst, upload: upload, total: e.Size}
 		}
 		m.pendingTransfers = items[1:]
+		m.bulkTotal = len(items)
 		var cmd tea.Cmd
 		m, cmd = startTransferWith(m, items[0].src, items[0].dst, items[0].upload, items[0].total)
 		return m, cmd
@@ -462,9 +471,11 @@ func startTransferWith(m Model, src, dst string, upload bool, total int64) (Mode
 	m.mode = modeProgress
 	m.destPane = 1 - m.activePane
 	m.progress = progressModel{
-		filename: filename,
-		total:    total,
-		startAt:  time.Now(),
+		filename:  filename,
+		total:     total,
+		startAt:   time.Now(),
+		fileNum:   m.bulkTotal - len(m.pendingTransfers),
+		fileTotal: m.bulkTotal,
 	}
 	return m, progressTickCmd(ch, errCh, filename, total, 0)
 }

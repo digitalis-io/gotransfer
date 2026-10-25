@@ -193,6 +193,7 @@ func (p *PaneModel) EnterDir(b fs.Browser) tea.Cmd {
 	p.cwd = newPath
 	p.cursor = 0
 	p.filter = ""
+	p.selected = nil
 	return loadEntriesCmd(b, newPath, p.sideIdx)
 }
 
@@ -206,6 +207,7 @@ func (p *PaneModel) GoUp(b fs.Browser) tea.Cmd {
 	p.cwd = parent
 	p.cursor = 0
 	p.filter = ""
+	p.selected = nil
 	return loadEntriesCmd(b, parent, p.sideIdx)
 }
 
