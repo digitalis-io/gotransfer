@@ -129,6 +129,7 @@ func (p *PaneModel) CycleSort() {
 // ToggleSortDir reverses the current sort direction.
 func (p *PaneModel) ToggleSortDir() {
 	p.sortDesc = !p.sortDesc
+	p.cursor = 0
 }
 
 // EnterDir navigates into the selected directory and returns a load command.

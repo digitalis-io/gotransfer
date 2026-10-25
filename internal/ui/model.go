@@ -117,6 +117,15 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.mode == modeFilter {
+		switch {
+		case msg.Code == tea.KeyEsc, msg.Code == tea.KeyEnter:
+			m.mode = modeBrowse
+		// future: handle rune input here in Task 18
+		}
+		return m, nil
+	}
+
 	switch msg.Code {
 	case tea.KeyTab:
 		if m.activePane == 0 {
