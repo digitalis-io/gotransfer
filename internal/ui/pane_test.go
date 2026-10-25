@@ -52,3 +52,20 @@ func TestPaneRenderNarrow(t *testing.T) {
 	lines2 := strings.Split(out2, "\n")
 	assert.Equal(t, 2, len(lines2), "Render must return exactly height lines for small dimensions")
 }
+
+func TestPaneFilter(t *testing.T) {
+	p := PaneModel{width: 40, height: 10}
+	p.SetEntries([]fs.FileEntry{{Name: "main.go"}, {Name: "README.md"}, {Name: "go.mod"}})
+	p.SetFilter("go")
+	for _, entry := range p.visible() {
+		assert.NotEqual(t, "README.md", entry.Name)
+	}
+	assert.Len(t, p.visible(), 2)
+}
+
+func TestPaneSortBySize(t *testing.T) {
+	p := PaneModel{width: 40, height: 10}
+	p.SetEntries([]fs.FileEntry{{Name: "big", Size: 1000}, {Name: "small", Size: 1}})
+	p.CycleSort() // SortName(0) → SortSize(1), ascending
+	assert.Equal(t, "small", p.visible()[0].Name)
+}

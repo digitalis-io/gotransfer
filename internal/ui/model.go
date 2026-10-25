@@ -49,8 +49,8 @@ type Model struct {
 // NewModel creates a Model wired to the given browsers and starting paths.
 func NewModel(local, remote fs.Browser, localCwd, remoteCwd string) Model {
 	return Model{
-		left:         PaneModel{cwd: localCwd},
-		right:        PaneModel{cwd: remoteCwd, isRemote: true},
+		left:         PaneModel{cwd: localCwd, sideIdx: 0},
+		right:        PaneModel{cwd: remoteCwd, isRemote: true, sideIdx: 1},
 		leftBrowser:  local,
 		rightBrowser: remote,
 	}
@@ -137,6 +137,35 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.left.MoveCursor(1)
 		} else {
 			m.right.MoveCursor(1)
+		}
+
+	case tea.KeyEnter:
+		if m.activePane == 0 {
+			return m, m.left.EnterDir(m.leftBrowser)
+		}
+		return m, m.right.EnterDir(m.rightBrowser)
+
+	case tea.KeyBackspace, '-':
+		if m.activePane == 0 {
+			return m, m.left.GoUp(m.leftBrowser)
+		}
+		return m, m.right.GoUp(m.rightBrowser)
+
+	case '/':
+		m.mode = modeFilter
+
+	case 's':
+		if m.activePane == 0 {
+			m.left.CycleSort()
+		} else {
+			m.right.CycleSort()
+		}
+
+	case 'S':
+		if m.activePane == 0 {
+			m.left.ToggleSortDir()
+		} else {
+			m.right.ToggleSortDir()
 		}
 
 	case tea.KeyEsc, 'q':

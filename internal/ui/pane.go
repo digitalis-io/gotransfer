@@ -2,7 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
 
 	"bitbucket.org/digitalisio/gotransfer/internal/fs"
 	"github.com/charmbracelet/lipgloss"
@@ -26,10 +30,11 @@ type PaneModel struct {
 	entries  []fs.FileEntry
 	cursor   int
 	cwd      string
-	filter   string    //nolint:unused
-	sortBy   SortField //nolint:unused
-	sortDesc bool      //nolint:unused
+	filter   string
+	sortBy   SortField
+	sortDesc bool
 	isRemote bool
+	sideIdx  int
 	width    int
 	height   int
 }
@@ -40,19 +45,117 @@ func (p *PaneModel) SetEntries(entries []fs.FileEntry) {
 	p.clampCursor()
 }
 
-// MoveCursor moves the cursor by delta, clamped to [0, len(entries)-1].
+// visible returns the filtered and sorted view of entries.
+func (p *PaneModel) visible() []fs.FileEntry {
+	entries := p.entries
+	if p.filter != "" {
+		q := strings.ToLower(p.filter)
+		var filtered []fs.FileEntry
+		for _, e := range entries {
+			if strings.Contains(strings.ToLower(e.Name), q) {
+				filtered = append(filtered, e)
+			}
+		}
+		entries = filtered
+	}
+	sorted := make([]fs.FileEntry, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool {
+		a, b := sorted[i], sorted[j]
+		if a.IsDir != b.IsDir {
+			return a.IsDir
+		}
+		switch p.sortBy {
+		case SortSize:
+			if a.Size != b.Size {
+				if p.sortDesc {
+					return a.Size > b.Size
+				}
+				return a.Size < b.Size
+			}
+		case SortTime:
+			if !a.ModTime.Equal(b.ModTime) {
+				if p.sortDesc {
+					return a.ModTime.After(b.ModTime)
+				}
+				return a.ModTime.Before(b.ModTime)
+			}
+		default: // SortName
+			an, bn := strings.ToLower(a.Name), strings.ToLower(b.Name)
+			if an != bn {
+				if p.sortDesc {
+					return an > bn
+				}
+				return an < bn
+			}
+		}
+		// tie-break by name to ensure stable strict ordering
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
+	return sorted
+}
+
+// MoveCursor moves the cursor by delta, clamped to [0, len(visible())-1].
 func (p *PaneModel) MoveCursor(delta int) {
 	p.cursor += delta
 	p.clampCursor()
 }
 
-// SelectedEntry returns the entry at the current cursor position.
-// Returns false when the entry list is empty.
+// SelectedEntry returns the entry at the current cursor position within the visible list.
+// Returns false when the visible list is empty.
 func (p *PaneModel) SelectedEntry() (fs.FileEntry, bool) {
-	if len(p.entries) == 0 {
+	vis := p.visible()
+	if len(vis) == 0 {
 		return fs.FileEntry{}, false
 	}
-	return p.entries[p.cursor], true
+	if p.cursor >= len(vis) {
+		return vis[len(vis)-1], true
+	}
+	return vis[p.cursor], true
+}
+
+// SetFilter sets the active filter string and clamps the cursor into the new visible range.
+func (p *PaneModel) SetFilter(q string) {
+	p.filter = q
+	p.clampCursor()
+}
+
+// CycleSort advances the sort field (Name→Size→Time→Name) and resets the cursor.
+func (p *PaneModel) CycleSort() {
+	p.sortBy = (p.sortBy + 1) % 3
+	p.cursor = 0
+}
+
+// ToggleSortDir reverses the current sort direction.
+func (p *PaneModel) ToggleSortDir() {
+	p.sortDesc = !p.sortDesc
+}
+
+// EnterDir navigates into the selected directory and returns a load command.
+// Returns nil if the selected entry is not a directory.
+func (p *PaneModel) EnterDir(b fs.Browser) tea.Cmd {
+	e, ok := p.SelectedEntry()
+	if !ok || !e.IsDir {
+		return nil
+	}
+	newPath := filepath.Join(p.cwd, e.Name)
+	p.cwd = newPath
+	p.cursor = 0
+	p.filter = ""
+	return loadEntriesCmd(b, newPath, p.sideIdx)
+}
+
+// GoUp navigates to the parent directory and returns a load command.
+// Returns nil if already at the root.
+func (p *PaneModel) GoUp(b fs.Browser) tea.Cmd {
+	parent := filepath.Dir(p.cwd)
+	if parent == p.cwd {
+		return nil
+	}
+	p.cwd = parent
+	p.cursor = 0
+	p.filter = ""
+	return loadEntriesCmd(b, parent, p.sideIdx)
 }
 
 // Render returns the full pane as a styled string.
@@ -94,26 +197,28 @@ func (p *PaneModel) Render(active bool) string {
 		rowsH = 0
 	}
 
+	vis := p.visible()
+
 	// Scroll window centred on cursor
 	start := 0
-	if rowsH > 0 && len(p.entries) > rowsH {
+	if rowsH > 0 && len(vis) > rowsH {
 		start = p.cursor - rowsH/2
 		if start < 0 {
 			start = 0
 		}
-		if start+rowsH > len(p.entries) {
-			start = len(p.entries) - rowsH
+		if start+rowsH > len(vis) {
+			start = len(vis) - rowsH
 		}
 	}
 
 	for i := 0; i < rowsH; i++ {
 		idx := start + i
-		if idx >= len(p.entries) {
+		if idx >= len(vis) {
 			lines = append(lines, strings.Repeat(" ", innerW))
 			continue
 		}
 
-		e := p.entries[idx]
+		e := vis[idx]
 
 		// Right-hand column: size (and mode for remote panes)
 		var right string
@@ -167,8 +272,13 @@ func (p *PaneModel) Render(active bool) string {
 		lines = append(lines, rowStyle.Render(row))
 	}
 
-	// Footer: item count
-	footer := fmt.Sprintf("%d items", len(p.entries))
+	// Footer: item count (shows filtered/total when a filter is active)
+	var footer string
+	if p.filter != "" {
+		footer = fmt.Sprintf("%d/%d items", len(vis), len(p.entries))
+	} else {
+		footer = fmt.Sprintf("%d items", len(p.entries))
+	}
 	footer = lipgloss.NewStyle().Foreground(colMuted).Width(innerW).Render(footer)
 	lines = append(lines, footer)
 
@@ -185,14 +295,15 @@ func (p *PaneModel) Render(active bool) string {
 }
 
 func (p *PaneModel) clampCursor() {
-	if len(p.entries) == 0 {
+	vis := p.visible()
+	if len(vis) == 0 {
 		p.cursor = 0
 		return
 	}
 	if p.cursor < 0 {
 		p.cursor = 0
 	}
-	if p.cursor >= len(p.entries) {
-		p.cursor = len(p.entries) - 1
+	if p.cursor >= len(vis) {
+		p.cursor = len(vis) - 1
 	}
 }
