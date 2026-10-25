@@ -27,6 +27,7 @@ const (
 // entriesLoadedMsg carries the result of a directory listing.
 type entriesLoadedMsg struct {
 	side    int
+	path    string
 	entries []fs.FileEntry
 	err     error
 }
@@ -83,8 +84,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.side == 0 {
+			if msg.path != m.left.cwd {
+				return m, nil // stale response
+			}
 			m.left.SetEntries(msg.entries)
 		} else {
+			if msg.path != m.right.cwd {
+				return m, nil // stale response
+			}
 			m.right.SetEntries(msg.entries)
 		}
 
@@ -183,6 +190,6 @@ func truncateStr(s string, n int) string {
 func loadEntriesCmd(b fs.Browser, path string, side int) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := b.List(context.Background(), path)
-		return entriesLoadedMsg{side: side, entries: entries, err: err}
+		return entriesLoadedMsg{side: side, path: path, entries: entries, err: err}
 	}
 }

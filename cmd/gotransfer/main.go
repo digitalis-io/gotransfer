@@ -1,8 +1,7 @@
 package main
 
 import (
-	"crypto/md5" //nolint:gosec
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -28,7 +27,7 @@ func main() {
 	}
 }
 
-func run(args []string) error {
+func run(args []string) (err error) {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: gotransfer user@host [-p port] [-i keyfile]")
 	}
@@ -71,7 +70,11 @@ func run(args []string) error {
 		return fmt.Errorf("auth: %w", err)
 	}
 
-	khPath := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("home dir: %w", err)
+	}
+	khPath := filepath.Join(homeDir, ".ssh", "known_hosts")
 	hostKeyCallback, err := buildHostKeyCallback(khPath)
 	if err != nil {
 		return fmt.Errorf("known_hosts: %w", err)
@@ -84,17 +87,25 @@ func run(args []string) error {
 	}
 
 	addr := fmt.Sprintf("%s:%d", host, port)
-	conn, err := gossh.Dial("tcp", addr, cfg)
-	if err != nil {
-		return fmt.Errorf("ssh dial %s: %w", addr, err)
+	conn, dialErr := gossh.Dial("tcp", addr, cfg)
+	if dialErr != nil {
+		return fmt.Errorf("ssh dial %s: %w", addr, dialErr)
 	}
-	defer conn.Close()
+	defer func() {
+		if cerr := conn.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	sftpClient, err := sftp.NewClient(conn)
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)
 	}
-	defer sftpClient.Close()
+	defer func() {
+		if cerr := sftpClient.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	localCwd, err := os.Getwd()
 	if err != nil {
@@ -119,7 +130,7 @@ func run(args []string) error {
 
 func buildAuth(keyFile string) ([]gossh.AuthMethod, error) {
 	if keyFile != "" {
-		data, err := os.ReadFile(keyFile)
+		data, err := os.ReadFile(keyFile) //nolint:gosec
 		if err != nil {
 			return nil, fmt.Errorf("read key %s: %w", keyFile, err)
 		}
@@ -158,21 +169,23 @@ func buildHostKeyCallback(khPath string) (gossh.HostKeyCallback, error) {
 
 	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
 		if cb != nil {
-			err := cb(hostname, remote, key)
-			if err == nil {
+			cbErr := cb(hostname, remote, key)
+			if cbErr == nil {
 				return nil
 			}
-			// If the host is known but key mismatch, reject immediately.
+			// Reject mismatched or revoked keys; only prompt for unknown hosts.
 			var keyErr *knownhosts.KeyError
-			if isKeyError(err, &keyErr) && len(keyErr.Want) > 0 {
-				return err
+			if !errors.As(cbErr, &keyErr) || len(keyErr.Want) > 0 {
+				return cbErr
 			}
 		}
 		// Unknown host: prompt user.
 		fp := fingerprint(key)
 		fmt.Fprintf(os.Stderr, "Unknown host %s\nFingerprint: %s\nAdd to known_hosts? [y/N] ", hostname, fp)
 		var answer string
-		fmt.Fscanln(os.Stdin, &answer)
+		if _, scanErr := fmt.Fscanln(os.Stdin, &answer); scanErr != nil {
+			answer = ""
+		}
 		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
 			return fmt.Errorf("host key rejected by user")
 		}
@@ -195,30 +208,21 @@ func sshAgentAuth() gossh.AuthMethod {
 	return gossh.PublicKeysCallback(agent.NewClient(conn).Signers)
 }
 
-func isKeyError(err error, target **knownhosts.KeyError) bool {
-	ke, ok := err.(*knownhosts.KeyError)
-	if ok {
-		*target = ke
-	}
-	return ok
-}
-
 func fingerprint(key gossh.PublicKey) string {
-	h := md5.Sum(key.Marshal()) //nolint:gosec
-	parts := make([]string, len(h))
-	for i, b := range h {
-		parts[i] = hex.EncodeToString([]byte{b})
-	}
-	return "MD5:" + strings.Join(parts, ":")
+	return gossh.FingerprintSHA256(key)
 }
 
-func appendKnownHost(khPath, hostname string, key gossh.PublicKey) error {
+func appendKnownHost(khPath, hostname string, key gossh.PublicKey) (err error) {
 	line := knownhosts.Line([]string{hostname}, key) + "\n"
-	f, err := os.OpenFile(khPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(khPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) //nolint:gosec
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 	_, err = f.WriteString(line)
-	f.Close()
 	return err
 }

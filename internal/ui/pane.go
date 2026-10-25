@@ -26,9 +26,9 @@ type PaneModel struct {
 	entries  []fs.FileEntry
 	cursor   int
 	cwd      string
-	filter   string
-	sortBy   SortField
-	sortDesc bool
+	filter   string    //nolint:unused
+	sortBy   SortField //nolint:unused
+	sortDesc bool      //nolint:unused
 	isRemote bool
 	width    int
 	height   int
@@ -86,7 +86,7 @@ func (p *PaneModel) Render(active bool) string {
 	}
 	header := label + "  " + p.cwd
 	header = ansi.Truncate(header, innerW, "…")
-	lines = append(lines, styleHeader.Copy().Width(innerW).Render(header))
+	lines = append(lines, styleHeader.Width(innerW).Render(header))
 
 	// Entry rows: innerH minus header row and footer row
 	rowsH := innerH - 2
@@ -116,7 +116,6 @@ func (p *PaneModel) Render(active bool) string {
 		e := p.entries[idx]
 
 		// Right-hand column: size (and mode for remote panes)
-		const sizeW = 7
 		var right string
 		if e.IsDir {
 			right = fmt.Sprintf("%7s", "<DIR>")
@@ -158,7 +157,7 @@ func (p *PaneModel) Render(active bool) string {
 			rowStyle = rowStyle.Foreground(colLink)
 		case e.IsDir:
 			rowStyle = rowStyle.Foreground(colDir)
-		case e.Mode&0111 != 0:
+		case e.Mode&0o111 != 0:
 			rowStyle = rowStyle.Foreground(colExec)
 		}
 		if idx == p.cursor {
@@ -182,7 +181,7 @@ func (p *PaneModel) Render(active bool) string {
 		borderStyle = styleInactiveBorder
 	}
 
-	return borderStyle.Copy().Width(innerW).Height(innerH).Render(content)
+	return borderStyle.Width(innerW).Height(innerH).Render(content)
 }
 
 func (p *PaneModel) clampCursor() {

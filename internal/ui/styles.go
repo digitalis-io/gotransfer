@@ -11,7 +11,7 @@ var (
 	colLink     = lipgloss.AdaptiveColor{Light: "#8839ef", Dark: "#cba6f7"}
 	colSel      = lipgloss.AdaptiveColor{Light: "#df8e1d", Dark: "#f9e2af"}
 	colBorder   = lipgloss.AdaptiveColor{Light: "#bcc0cc", Dark: "#313244"}
-	colProgress = lipgloss.AdaptiveColor{Light: "#40a02b", Dark: "#a6e3a1"}
+	colProgress = lipgloss.AdaptiveColor{Light: "#40a02b", Dark: "#a6e3a1"} //nolint:unused
 )
 
 var (

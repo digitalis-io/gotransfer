@@ -3,7 +3,6 @@ package ui
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -14,7 +13,7 @@ func overlayCenter(base, popup string) string {
 	screenH := len(baseLines)
 	screenW := 0
 	for _, l := range baseLines {
-		if w := lipgloss.Width(l); w > screenW {
+		if w := ansi.StringWidth(l); w > screenW {
 			screenW = w
 		}
 	}
@@ -23,7 +22,7 @@ func overlayCenter(base, popup string) string {
 	popH := len(popupLines)
 	popW := 0
 	for _, l := range popupLines {
-		if w := lipgloss.Width(l); w > popW {
+		if w := ansi.StringWidth(l); w > popW {
 			popW = w
 		}
 	}
