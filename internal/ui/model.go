@@ -26,6 +26,14 @@ const (
 	modeMkdir            //nolint:deadcode,unused
 )
 
+// confirmAction distinguishes which confirm dialog is active.
+type confirmAction int
+
+const (
+	confirmDelete   confirmAction = iota
+	confirmOverwrite              //nolint:deadcode,unused
+)
+
 // entriesLoadedMsg carries the result of a directory listing.
 type entriesLoadedMsg struct {
 	side    int
@@ -61,6 +69,13 @@ type ProgressMsg struct {
 	err      error
 }
 
+// operationDoneMsg signals that a delete/rename/mkdir completed.
+type operationDoneMsg struct {
+	side int
+	cwd  string
+	err  error
+}
+
 // Model is the root bubbletea model for the dual-pane TUI.
 type Model struct {
 	left, right      PaneModel
@@ -81,6 +96,9 @@ type Model struct {
 	pendingTotal     int64
 	pendingTransfers []transferItem
 	bulkTotal        int // total files queued for the current bulk transfer
+	inputBuf         string
+	pending          confirmAction
+	pendingEntry     fs.FileEntry
 }
 
 // NewModel creates a Model wired to the given browsers and starting paths.
@@ -177,9 +195,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, progressTickCmd(m.transferCh, m.transferErrCh, msg.filename, msg.total, msg.written)
 		}
 
+	case operationDoneMsg:
+		if msg.err != nil {
+			m.mode = modeError
+			m.lastErr = msg.err
+			return m, nil
+		}
+		if msg.side == 0 {
+			return m, loadEntriesCmd(m.leftBrowser, msg.cwd, 0)
+		}
+		return m, loadEntriesCmd(m.rightBrowser, msg.cwd, 1)
+
 	case statResultMsg:
 		if msg.exists {
 			m.mode = modeConfirm
+			m.pending = confirmOverwrite
 			m.confirmMsg = fmt.Sprintf("Overwrite %s?", filepath.Base(msg.dst))
 			m.pendingSrc = msg.src
 			m.pendingDst = msg.dst
@@ -226,11 +256,72 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeConfirm {
 		switch msg.Code {
 		case tea.KeyEnter, 'y':
+			if m.pending == confirmDelete {
+				side := m.activePane
+				cwd := m.activePaneCwd()
+				path := filepath.Join(cwd, m.pendingEntry.Name)
+				cmd := deleteCmd(m.activeBrowser(), path, side, cwd)
+				m.mode = modeBrowse
+				return m, cmd
+			}
 			var cmd tea.Cmd
 			m, cmd = startTransferWith(m, m.pendingSrc, m.pendingDst, m.pendingUpload, m.pendingTotal)
 			return m, cmd
 		case tea.KeyEsc, 'n':
 			m.mode = modeBrowse
+		}
+		return m, nil
+	}
+
+	if m.mode == modeRename {
+		switch msg.Code {
+		case tea.KeyEnter:
+			if m.inputBuf != "" {
+				side := m.activePane
+				cwd := m.activePaneCwd()
+				src := filepath.Join(cwd, m.pendingEntry.Name)
+				dst := filepath.Join(cwd, m.inputBuf)
+				cmd := renameCmd(m.activeBrowser(), src, dst, side, cwd)
+				m.mode = modeBrowse
+				return m, cmd
+			}
+		case tea.KeyEsc:
+			m.mode = modeBrowse
+		case tea.KeyBackspace:
+			runes := []rune(m.inputBuf)
+			if len(runes) > 0 {
+				m.inputBuf = string(runes[:len(runes)-1])
+			}
+		default:
+			if msg.Code >= 32 {
+				m.inputBuf += string(msg.Code)
+			}
+		}
+		return m, nil
+	}
+
+	if m.mode == modeMkdir {
+		switch msg.Code {
+		case tea.KeyEnter:
+			if m.inputBuf != "" {
+				side := m.activePane
+				cwd := m.activePaneCwd()
+				path := filepath.Join(cwd, m.inputBuf)
+				cmd := mkdirCmd(m.activeBrowser(), path, side, cwd)
+				m.mode = modeBrowse
+				return m, cmd
+			}
+		case tea.KeyEsc:
+			m.mode = modeBrowse
+		case tea.KeyBackspace:
+			runes := []rune(m.inputBuf)
+			if len(runes) > 0 {
+				m.inputBuf = string(runes[:len(runes)-1])
+			}
+		default:
+			if msg.Code >= 32 {
+				m.inputBuf += string(msg.Code)
+			}
 		}
 		return m, nil
 	}
@@ -360,6 +451,25 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m, cmd = startTransferWith(m, items[0].src, items[0].dst, items[0].upload, items[0].total)
 		return m, cmd
 
+	case tea.KeyDelete:
+		if e, ok := m.activeEntry(); ok {
+			m.pendingEntry = e
+			m.pending = confirmDelete
+			m.confirmMsg = fmt.Sprintf("Delete %s?", e.Name)
+			m.mode = modeConfirm
+		}
+
+	case 'r':
+		if e, ok := m.activeEntry(); ok {
+			m.pendingEntry = e
+			m.inputBuf = e.Name
+			m.mode = modeRename
+		}
+
+	case 'd':
+		m.inputBuf = ""
+		m.mode = modeMkdir
+
 	case tea.KeyEsc, 'q':
 		return m, tea.Quit
 	}
@@ -413,6 +523,24 @@ func (m Model) render() string {
 		content = overlayCenter(content, popup)
 	}
 
+	if m.mode == modeRename {
+		display := truncateStr(m.inputBuf, 24) + "█"
+		popup := fmt.Sprintf(
+			"┌─ Rename ────────────────────┐\n│ %-27s │\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘",
+			truncateStr(display, 27),
+		)
+		content = overlayCenter(content, popup)
+	}
+
+	if m.mode == modeMkdir {
+		display := truncateStr(m.inputBuf, 24) + "█"
+		popup := fmt.Sprintf(
+			"┌─ New Directory ─────────────┐\n│ %-27s │\n│  [Enter] OK  [Esc] Cancel   │\n└─────────────────────────────┘",
+			truncateStr(display, 27),
+		)
+		content = overlayCenter(content, popup)
+	}
+
 	if m.mode == modeError && m.lastErr != nil {
 		popup := fmt.Sprintf(
 			"┌─ Error ────────────────────┐\n│ %-28s │\n└────────────────────────────┘",
@@ -431,6 +559,54 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return string(runes[:n-1]) + "…"
+}
+
+// activeBrowser returns the browser for the active pane.
+func (m Model) activeBrowser() fs.Browser {
+	if m.activePane == 0 {
+		return m.leftBrowser
+	}
+	return m.rightBrowser
+}
+
+// activePaneCwd returns the cwd of the active pane.
+func (m Model) activePaneCwd() string {
+	if m.activePane == 0 {
+		return m.left.cwd
+	}
+	return m.right.cwd
+}
+
+// activeEntry returns the cursor entry of the active pane.
+func (m *Model) activeEntry() (fs.FileEntry, bool) {
+	if m.activePane == 0 {
+		return m.left.SelectedEntry()
+	}
+	return m.right.SelectedEntry()
+}
+
+// deleteCmd removes path and reloads the pane.
+func deleteCmd(b fs.Browser, path string, side int, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		err := b.Delete(context.Background(), path)
+		return operationDoneMsg{side: side, cwd: cwd, err: err}
+	}
+}
+
+// renameCmd renames src to dst and reloads the pane.
+func renameCmd(b fs.Browser, src, dst string, side int, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		err := b.Rename(context.Background(), src, dst)
+		return operationDoneMsg{side: side, cwd: cwd, err: err}
+	}
+}
+
+// mkdirCmd creates a directory and reloads the pane.
+func mkdirCmd(b fs.Browser, path string, side int, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		err := b.Mkdir(context.Background(), path)
+		return operationDoneMsg{side: side, cwd: cwd, err: err}
+	}
 }
 
 func loadEntriesCmd(b fs.Browser, path string, side int) tea.Cmd {
