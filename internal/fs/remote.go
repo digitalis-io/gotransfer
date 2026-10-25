@@ -12,10 +12,14 @@ import (
 // RemoteUploader extends Browser with file transfer operations.
 type RemoteUploader interface {
 	Browser
-	// Upload copies a local file to the remote path.
-	Upload(ctx context.Context, localPath, remotePath string) error
-	// Download copies a remote file to the local path.
-	Download(ctx context.Context, remotePath, localPath string) error
+	// Upload copies a local file to the remote path. progress receives byte counts
+	// after each read chunk; pass nil to skip progress reporting. Upload closes
+	// progress when the transfer completes.
+	Upload(ctx context.Context, localPath, remotePath string, progress chan<- int64) error
+	// Download copies a remote file to the local path. progress receives byte
+	// counts after each read chunk; pass nil to skip progress reporting. Download
+	// closes progress when the transfer completes.
+	Download(ctx context.Context, remotePath, localPath string, progress chan<- int64) error
 }
 
 type remoteBrowser struct {
@@ -94,8 +98,31 @@ func (r *remoteBrowser) Mkdir(_ context.Context, path string) error {
 	return r.client.MkdirAll(path)
 }
 
+// countingReader wraps an io.Reader and sends byte counts to a channel after each Read.
+type countingReader struct {
+	r        io.Reader
+	progress chan<- int64
+}
+
+func (cr *countingReader) Read(p []byte) (n int, err error) {
+	n, err = cr.r.Read(p)
+	if n > 0 && cr.progress != nil {
+		select {
+		case cr.progress <- int64(n):
+		default: // drop if channel full rather than block the transfer
+		}
+	}
+	return
+}
+
 // Upload copies the local file at localPath to remotePath on the SFTP server.
-func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string) error {
+// progress receives cumulative byte counts; pass nil to skip. Upload closes
+// progress before returning.
+func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string, progress chan<- int64) error {
+	if progress != nil {
+		defer close(progress)
+	}
+
 	src, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -107,7 +134,8 @@ func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string) 
 		return err
 	}
 
-	if _, err := io.Copy(dst, src); err != nil {
+	reader := io.Reader(&countingReader{r: src, progress: progress})
+	if _, err := io.Copy(dst, reader); err != nil {
 		dst.Close()
 		return err
 	}
@@ -115,7 +143,13 @@ func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string) 
 }
 
 // Download copies the remote file at remotePath to localPath on the local filesystem.
-func (r *remoteBrowser) Download(_ context.Context, remotePath, localPath string) error {
+// progress receives cumulative byte counts; pass nil to skip. Download closes
+// progress before returning.
+func (r *remoteBrowser) Download(_ context.Context, remotePath, localPath string, progress chan<- int64) error {
+	if progress != nil {
+		defer close(progress)
+	}
+
 	src, err := r.client.Open(remotePath)
 	if err != nil {
 		return err
@@ -127,7 +161,8 @@ func (r *remoteBrowser) Download(_ context.Context, remotePath, localPath string
 		return err
 	}
 
-	if _, err := io.Copy(dst, src); err != nil {
+	reader := io.Reader(&countingReader{r: src, progress: progress})
+	if _, err := io.Copy(dst, reader); err != nil {
 		dst.Close()
 		return err
 	}

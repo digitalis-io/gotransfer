@@ -52,9 +52,9 @@ func TestRemoteBrowserUploadDownload(t *testing.T) {
 	local := filepath.Join(t.TempDir(), "test.txt")
 	require.NoError(t, os.WriteFile(local, []byte("gotransfer test"), 0644))
 	remote := "/tmp/gotransfer-test-upload.txt"
-	require.NoError(t, rb.Upload(context.Background(), local, remote))
+	require.NoError(t, rb.Upload(context.Background(), local, remote, nil))
 	dst := filepath.Join(t.TempDir(), "downloaded.txt")
-	require.NoError(t, rb.Download(context.Background(), remote, dst))
+	require.NoError(t, rb.Download(context.Background(), remote, dst, nil))
 	got, _ := os.ReadFile(dst)
 	assert.Equal(t, "gotransfer test", string(got))
 }

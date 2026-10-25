@@ -3,7 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
@@ -35,6 +37,15 @@ type entriesLoadedMsg struct {
 // errorMsg carries an error to display in the TUI.
 type errorMsg struct{ err error }
 
+// ProgressMsg carries a transfer progress update.
+type ProgressMsg struct {
+	filename string
+	written  int64
+	total    int64
+	done     bool
+	err      error
+}
+
 // Model is the root bubbletea model for the dual-pane TUI.
 type Model struct {
 	left, right   PaneModel
@@ -44,6 +55,15 @@ type Model struct {
 	width, height int
 	leftBrowser   fs.Browser
 	rightBrowser  fs.Browser
+	progress      progressModel
+	transferCh    <-chan int64
+	transferErrCh <-chan error
+	destPane      int
+	confirmMsg    string
+	pendingSrc    string
+	pendingDst    string
+	pendingUpload bool
+	pendingTotal  int64
 }
 
 // NewModel creates a Model wired to the given browsers and starting paths.
@@ -99,6 +119,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeError
 		m.lastErr = msg.err
 
+	case ProgressMsg:
+		m.progress.written = msg.written
+		m.progress.total = msg.total
+		if msg.done {
+			if msg.err != nil {
+				m.mode = modeError
+				m.lastErr = msg.err
+			} else {
+				m.mode = modeBrowse
+			}
+			m.transferCh = nil
+			m.transferErrCh = nil
+			// Reload the destination pane captured at transfer start.
+			if m.destPane == 0 {
+				return m, loadEntriesCmd(m.leftBrowser, m.left.cwd, 0)
+			}
+			return m, loadEntriesCmd(m.rightBrowser, m.right.cwd, 1)
+		}
+		// Reschedule a tick to drain the next value from the channel.
+		if m.transferCh != nil {
+			return m, progressTickCmd(m.transferCh, m.transferErrCh, msg.filename, msg.total, msg.written)
+		}
+
 	case tea.KeyPressMsg:
 		return m.handleBrowseKey(msg)
 
@@ -121,7 +164,24 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.Code == tea.KeyEsc, msg.Code == tea.KeyEnter:
 			m.mode = modeBrowse
-		// future: handle rune input here in Task 18
+			// future: handle rune input here in Task 18
+		}
+		return m, nil
+	}
+
+	if m.mode == modeProgress {
+		// Transfer in progress — block all keys; only InterruptMsg (Ctrl+C) can quit.
+		return m, nil
+	}
+
+	if m.mode == modeConfirm {
+		switch msg.Code {
+		case tea.KeyEnter, 'y':
+			m.mode = modeProgress
+			cmd := m.startTransferWith(m.pendingSrc, m.pendingDst, m.pendingUpload, m.pendingTotal)
+			return m, cmd
+		case tea.KeyEsc, 'n':
+			m.mode = modeBrowse
 		}
 		return m, nil
 	}
@@ -177,6 +237,10 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.right.ToggleSortDir()
 		}
 
+	case 'c':
+		cmd := m.startTransfer()
+		return m, cmd
+
 	case tea.KeyEsc, 'q':
 		return m, tea.Quit
 	}
@@ -205,6 +269,31 @@ func (m Model) render() string {
 	b.WriteString(footer)
 	content := b.String()
 
+	if m.mode == modeProgress {
+		inner := m.progress.Render(m.width - 6)
+		lines := strings.Split(inner, "\n")
+		boxW := m.width - 4
+		if boxW < 20 {
+			boxW = 20
+		}
+		var sb strings.Builder
+		// Top border: ┌ + "─ Transferring " (15) + repeat + "─┐" (2) = boxW+4 total.
+		sb.WriteString(fmt.Sprintf("┌─ Transferring %s─┐\n", strings.Repeat("─", boxW-14)))
+		for _, l := range lines {
+			sb.WriteString(fmt.Sprintf("│ %-*s │\n", boxW, truncateStr(l, boxW)))
+		}
+		sb.WriteString(fmt.Sprintf("└%s┘", strings.Repeat("─", boxW+2)))
+		content = overlayCenter(content, sb.String())
+	}
+
+	if m.mode == modeConfirm {
+		popup := fmt.Sprintf(
+			"┌─ Confirm ─────────────────┐\n│ %-27s │\n│ [Enter/y] Yes  [Esc/n] No │\n└───────────────────────────┘",
+			truncateStr(m.confirmMsg, 27),
+		)
+		content = overlayCenter(content, popup)
+	}
+
 	if m.mode == modeError && m.lastErr != nil {
 		popup := fmt.Sprintf(
 			"┌─ Error ────────────────────┐\n│ %-28s │\n└────────────────────────────┘",
@@ -229,5 +318,96 @@ func loadEntriesCmd(b fs.Browser, path string, side int) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := b.List(context.Background(), path)
 		return entriesLoadedMsg{side: side, path: path, entries: entries, err: err}
+	}
+}
+
+// startTransfer checks for destination conflicts then either enters confirm mode
+// or proceeds directly. Left active → upload (local→remote); right active → download.
+func (m *Model) startTransfer() tea.Cmd {
+	if _, ok := m.rightBrowser.(fs.RemoteUploader); !ok {
+		return func() tea.Msg {
+			return errorMsg{err: fmt.Errorf("right browser does not support transfers")}
+		}
+	}
+
+	var entry fs.FileEntry
+	var found bool
+	if m.activePane == 0 {
+		entry, found = m.left.SelectedEntry()
+	} else {
+		entry, found = m.right.SelectedEntry()
+	}
+	if !found || entry.IsDir {
+		return nil
+	}
+
+	upload := m.activePane == 0
+	var src, dst string
+	var dstBrowser fs.Browser
+	if upload {
+		src = filepath.Join(m.left.cwd, entry.Name)
+		dst = m.right.cwd + "/" + entry.Name
+		dstBrowser = m.rightBrowser
+	} else {
+		src = m.right.cwd + "/" + entry.Name
+		dst = filepath.Join(m.left.cwd, entry.Name)
+		dstBrowser = m.leftBrowser
+	}
+
+	_, err := dstBrowser.Stat(context.Background(), dst)
+	if err == nil {
+		// Destination exists — ask for confirmation.
+		m.mode = modeConfirm
+		m.confirmMsg = fmt.Sprintf("Overwrite %s?", filepath.Base(dst))
+		m.pendingSrc = src
+		m.pendingDst = dst
+		m.pendingUpload = upload
+		m.pendingTotal = entry.Size
+		return nil
+	}
+	// Destination absent — transfer immediately.
+	return m.startTransferWith(src, dst, upload, entry.Size)
+}
+
+// startTransferWith launches the goroutine and returns the first progress tick command.
+func (m *Model) startTransferWith(src, dst string, upload bool, total int64) tea.Cmd {
+	rb := m.rightBrowser.(fs.RemoteUploader)
+	ch := make(chan int64, 64)
+	errCh := make(chan error, 1)
+	filename := filepath.Base(src)
+
+	go func() {
+		ctx := context.Background()
+		var err error
+		if upload {
+			err = rb.Upload(ctx, src, dst, ch)
+		} else {
+			err = rb.Download(ctx, src, dst, ch)
+		}
+		errCh <- err
+	}()
+
+	m.transferCh = ch
+	m.transferErrCh = errCh
+	m.mode = modeProgress
+	m.destPane = 1 - m.activePane
+	m.progress = progressModel{
+		filename: filename,
+		total:    total,
+		startAt:  time.Now(),
+	}
+	return progressTickCmd(ch, errCh, filename, total, 0)
+}
+
+// progressTickCmd reads one value from ch and returns a ProgressMsg.
+// When the channel is closed it drains errCh and returns a done ProgressMsg.
+func progressTickCmd(ch <-chan int64, errCh <-chan error, filename string, total, prev int64) tea.Cmd {
+	return func() tea.Msg {
+		n, ok := <-ch
+		if !ok {
+			err := <-errCh
+			return ProgressMsg{filename: filename, written: prev, total: total, done: true, err: err}
+		}
+		return ProgressMsg{filename: filename, written: prev + n, total: total, done: false}
 	}
 }
