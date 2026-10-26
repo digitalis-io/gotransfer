@@ -1,4 +1,5 @@
 # Binaries
+/gotransfer
 bin/
 *.exe
 *.dll
