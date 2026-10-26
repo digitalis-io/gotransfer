@@ -246,10 +246,36 @@ func (m Model) handleBrowseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.mode == modeFilter {
-		switch {
-		case msg.Code == tea.KeyEsc, msg.Code == tea.KeyEnter:
+		switch msg.Code {
+		case tea.KeyEsc:
+			if m.activePane == 0 {
+				m.left.SetFilter("")
+			} else {
+				m.right.SetFilter("")
+			}
 			m.mode = modeBrowse
-			// future: handle rune input here in Task 18
+		case tea.KeyEnter:
+			m.mode = modeBrowse
+		case tea.KeyBackspace:
+			if m.activePane == 0 {
+				runes := []rune(m.left.filter)
+				if len(runes) > 0 {
+					m.left.SetFilter(string(runes[:len(runes)-1]))
+				}
+			} else {
+				runes := []rune(m.right.filter)
+				if len(runes) > 0 {
+					m.right.SetFilter(string(runes[:len(runes)-1]))
+				}
+			}
+		default:
+			if msg.Text != "" {
+				if m.activePane == 0 {
+					m.left.SetFilter(m.left.filter + msg.Text)
+				} else {
+					m.right.SetFilter(m.right.filter + msg.Text)
+				}
+			}
 		}
 		return m, nil
 	}
@@ -508,9 +534,19 @@ func (m Model) render() string {
 		m.left.Render(m.activePane == 0),
 		m.right.Render(m.activePane == 1),
 	)
-	footer := styleStatusBar.Render(
-		"  [Tab] switch pane  [j/k] navigate  [?] help  [q] quit",
-	)
+	var footerText string
+	if m.mode == modeFilter {
+		var filterStr string
+		if m.activePane == 0 {
+			filterStr = m.left.filter
+		} else {
+			filterStr = m.right.filter
+		}
+		footerText = fmt.Sprintf("  Filter: %s█  [Enter] confirm  [Esc] clear", filterStr)
+	} else {
+		footerText = "  [Tab] switch pane  [j/k] navigate  [?] help  [q] quit"
+	}
+	footer := styleStatusBar.Render(footerText)
 	var b strings.Builder
 	b.WriteString(panes)
 	b.WriteString("\n")
@@ -526,11 +562,11 @@ func (m Model) render() string {
 		}
 		var sb strings.Builder
 		// Top border: ┌ + "─ Transferring " (15) + repeat + "─┐" (2) = boxW+4 total.
-		sb.WriteString(fmt.Sprintf("┌─ Transferring %s─┐\n", strings.Repeat("─", boxW-14)))
+		fmt.Fprintf(&sb, "┌─ Transferring %s─┐\n", strings.Repeat("─", boxW-14))
 		for _, l := range lines {
-			sb.WriteString(fmt.Sprintf("│ %-*s │\n", boxW, truncateStr(l, boxW)))
+			fmt.Fprintf(&sb, "│ %-*s │\n", boxW, truncateStr(l, boxW))
 		}
-		sb.WriteString(fmt.Sprintf("└%s┘", strings.Repeat("─", boxW+2)))
+		fmt.Fprintf(&sb, "└%s┘", strings.Repeat("─", boxW+2))
 		content = overlayCenter(content, sb.String())
 	}
 

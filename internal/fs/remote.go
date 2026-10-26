@@ -123,11 +123,11 @@ func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string, 
 		defer close(progress)
 	}
 
-	src, err := os.Open(localPath)
+	src, err := os.Open(localPath) //nolint:gosec // user-selected path in file manager
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dst, err := r.client.Create(remotePath)
 	if err != nil {
@@ -136,7 +136,7 @@ func (r *remoteBrowser) Upload(_ context.Context, localPath, remotePath string, 
 
 	reader := io.Reader(&countingReader{r: src, progress: progress})
 	if _, err := io.Copy(dst, reader); err != nil {
-		dst.Close()
+		_ = dst.Close()
 		return err
 	}
 	return dst.Close()
@@ -154,16 +154,16 @@ func (r *remoteBrowser) Download(_ context.Context, remotePath, localPath string
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
-	dst, err := os.Create(localPath)
+	dst, err := os.Create(localPath) //nolint:gosec // user-selected path in file manager
 	if err != nil {
 		return err
 	}
 
 	reader := io.Reader(&countingReader{r: src, progress: progress})
 	if _, err := io.Copy(dst, reader); err != nil {
-		dst.Close()
+		_ = dst.Close()
 		return err
 	}
 	return dst.Close()

@@ -85,5 +85,5 @@ func (l *localBrowser) Rename(_ context.Context, src, dst string) error {
 
 // Mkdir creates the directory at path, including any necessary parents.
 func (l *localBrowser) Mkdir(_ context.Context, path string) error {
-	return os.MkdirAll(path, 0755)
+	return os.MkdirAll(path, 0750)
 }

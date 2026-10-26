@@ -201,7 +201,7 @@ func sshAgentAuth() gossh.AuthMethod {
 	if sock == "" {
 		return nil
 	}
-	conn, err := net.Dial("unix", sock)
+	conn, err := net.Dial("unix", sock) //nolint:gosec // local SSH agent socket
 	if err != nil {
 		return nil
 	}
